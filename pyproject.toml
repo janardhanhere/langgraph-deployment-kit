@@ -1,11 +1,10 @@
 [project]
-name = "agent-service-toolkit"
+name = "langgraph-deployment-kit"
 version = "0.1.0"
-description = "Toolkit for running an AI agent service built with LangGraph and FastAPI"
+description = "A robust framework for deploying and running LangGraph agents as backend services, with seamless React integration and Langfuse analytics."
 readme = "README.md"
-authors = [{ name = "Joshua Carroll", email = "carroll.joshk@gmail.com" }]
+authors = [{ name = "Janardhan B", email = "janardhan.balaji@outlook.com" }]
 classifiers = [
-    "Development Status :: 4 - Beta",
     "License :: OSI Approved :: MIT License",
     "Framework :: FastAPI",
     "Programming Language :: Python :: 3.11",
