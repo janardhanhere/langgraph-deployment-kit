@@ -1,9 +1,7 @@
 from typing import Any, Literal, NotRequired
 
-from pydantic import BaseModel, Field, SerializeAsAny
+from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
-
-from schema.models import AllModelEnum, AnthropicModelName, OpenAIModelName
 
 
 class AgentInfo(BaseModel):
@@ -20,20 +18,14 @@ class AgentInfo(BaseModel):
 
 
 class ServiceMetadata(BaseModel):
-    """Metadata about the service including available agents and models."""
+    """Metadata about the service including available agents."""
 
     agents: list[AgentInfo] = Field(
         description="List of available agents.",
     )
-    models: list[AllModelEnum] = Field(
-        description="List of available LLMs.",
-    )
     default_agent: str = Field(
         description="Default agent used when none is specified.",
         examples=["research-assistant"],
-    )
-    default_model: AllModelEnum = Field(
-        description="Default model used when none is specified.",
     )
 
 
@@ -44,16 +36,21 @@ class UserInput(BaseModel):
         description="User input to the agent.",
         examples=["What is the weather in Tokyo?"],
     )
-    model: SerializeAsAny[AllModelEnum] | None = Field(
+    model: str | None = Field(
         title="Model",
-        description="LLM Model to use for the agent.",
-        default=OpenAIModelName.GPT_4O_MINI,
-        examples=[OpenAIModelName.GPT_4O_MINI, AnthropicModelName.HAIKU_35],
+        description="LLM Model identifier to use for the agent.",
+        default=None,
+        examples=["gpt-4o-mini", "claude-3.5-haiku"],
     )
     thread_id: str | None = Field(
         description="Thread ID to persist and continue a multi-turn conversation.",
         default=None,
         examples=["847c6285-8fc9-4560-a83f-4e6285809254"],
+    )
+    user_id: str | None = Field(
+        description="User ID to associate with this conversation and make available to the agent.",
+        default=None,
+        examples=["user_12345"],
     )
     agent_config: dict[str, Any] = Field(
         description="Additional configuration to pass through to the agent",
@@ -67,6 +64,10 @@ class StreamInput(UserInput):
 
     stream_tokens: bool = Field(
         description="Whether to stream LLM tokens to the client.",
+        default=True,
+    )
+    stream_node_updates: bool = Field(
+        description="Whether to stream node updates to the client.",
         default=True,
     )
 
@@ -132,7 +133,7 @@ class ChatMessage(BaseModel):
 
 
 class Feedback(BaseModel):  # type: ignore[no-redef]
-    """Feedback for a run, to record to LangSmith."""
+    """Feedback for a run, to record to Langfuse."""
 
     run_id: str = Field(
         description="Run ID to record feedback for.",
@@ -147,7 +148,7 @@ class Feedback(BaseModel):  # type: ignore[no-redef]
         examples=[0.8],
     )
     kwargs: dict[str, Any] = Field(
-        description="Additional feedback kwargs, passed to LangSmith.",
+        description="Additional feedback kwargs, passed to Langfuse.",
         default={},
         examples=[{"comment": "In-line human feedback"}],
     )

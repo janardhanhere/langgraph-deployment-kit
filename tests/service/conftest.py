@@ -4,13 +4,35 @@ import pytest
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 
-from service import app
+# Mock the agents module before importing app
+with patch.dict('sys.modules', {
+    'agents': Mock(),
+    'agents.agents': Mock(),
+    'agents.research_assistant': Mock()
+}):
+    from service import app
+
+
+@pytest.fixture(autouse=True)
+def mock_agents():
+    """Mock the agents module to prevent actual LLM initialization."""
+    with patch('agents.agents.DEFAULT_AGENT', 'default_agent'):
+        with patch('agents.agents.get_agent') as mock_get_agent:
+            agent_mock = AsyncMock()
+            agent_mock.ainvoke = AsyncMock(
+                return_value=[("values", {"messages": [AIMessage(content="Test response")]})]
+            )
+            agent_mock.get_state = Mock()
+            mock_get_agent.return_value = agent_mock
+            yield agent_mock
 
 
 @pytest.fixture
 def test_client():
     """Fixture to create a FastAPI test client."""
-    return TestClient(app)
+    # Patch settings to force deployment mode during tests
+    with patch("core.settings.settings.MODE", "deployment"):
+        return TestClient(app)
 
 
 @pytest.fixture
@@ -26,9 +48,13 @@ def mock_agent():
 
 
 @pytest.fixture
-def mock_settings(mock_env):
+def mock_settings():
     """Fixture to ensure settings are clean for each test."""
     with patch("service.service.settings") as mock_settings:
+        # Configure settings for deployment mode
+        mock_settings.MODE = "deployment"
+        mock_settings.DEFAULT_MODEL = "placeholder-model"
+        mock_settings.AVAILABLE_MODELS = {"placeholder-model"}
         yield mock_settings
 
 

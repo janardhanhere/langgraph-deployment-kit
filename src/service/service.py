@@ -10,12 +10,12 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, status
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.middleware.cors import CORSMiddleware  # Add CORS middleware
 from langchain_core._api import LangChainBetaWarning
 from langchain_core.messages import AIMessage, AIMessageChunk, AnyMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.pregel import Pregel
 from langgraph.types import Command, Interrupt
-from langsmith import Client as LangsmithClient
 
 from agents import DEFAULT_AGENT, get_agent, get_all_agent_info
 from core import settings
@@ -43,14 +43,26 @@ logger = logging.getLogger(__name__)
 def verify_bearer(
     http_auth: Annotated[
         HTTPAuthorizationCredentials | None,
-        Depends(HTTPBearer(description="Please provide AUTH_SECRET api key.", auto_error=False)),
+        Depends(HTTPBearer(description="Bearer authentication with API key.", auto_error=False)),
     ],
 ) -> None:
+    """
+    Verify the Bearer token against the configured AUTH_SECRET.
+    
+    If AUTH_SECRET is not set, authentication is bypassed (development mode only).
+    In production, AUTH_SECRET should always be set.
+    """
     if not settings.AUTH_SECRET:
+        logger.warning("AUTH_SECRET is not set - API endpoints are unprotected!")
         return
+        
     auth_secret = settings.AUTH_SECRET.get_secret_value()
     if not http_auth or http_auth.credentials != auth_secret:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing API key",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 
 @asynccontextmanager
@@ -72,18 +84,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 app = FastAPI(lifespan=lifespan)
+
+# Add CORS middleware to allow cross-origin requests
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins for development (adjust for production)
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all methods
+    allow_headers=["*"],  # Allow all headers
+)
+
 router = APIRouter(dependencies=[Depends(verify_bearer)])
 
 
 @router.get("/info")
 async def info() -> ServiceMetadata:
-    models = list(settings.AVAILABLE_MODELS)
-    models.sort()
     return ServiceMetadata(
         agents=get_all_agent_info(),
-        models=models,
         default_agent=DEFAULT_AGENT,
-        default_model=settings.DEFAULT_MODEL,
     )
 
 
@@ -94,9 +112,22 @@ async def _handle_input(user_input: UserInput, agent: Pregel) -> tuple[dict[str,
     """
     run_id = uuid4()
     thread_id = user_input.thread_id or str(uuid4())
+    user_id = user_input.user_id
 
-    configurable = {"thread_id": thread_id, "model": user_input.model}
+    # Build configurable dictionary
+    configurable = {
+        "thread_id": thread_id
+    }
+    
+    # Add model if provided
+    if user_input.model:
+        configurable["model"] = user_input.model
+    
+    # Add user_id to the configurable if provided
+    if user_id:
+        configurable["user_id"] = user_id
 
+    # Add agent_config
     if user_input.agent_config:
         if overlap := configurable.keys() & user_input.agent_config.keys():
             raise HTTPException(
@@ -105,10 +136,21 @@ async def _handle_input(user_input: UserInput, agent: Pregel) -> tuple[dict[str,
             )
         configurable.update(user_input.agent_config)
 
-    config = RunnableConfig(
-        configurable=configurable,
-        run_id=run_id,
-    )
+    # Get Langfuse callback handler
+    from core.telemetry import get_langfuse_callback
+    langfuse_handler = get_langfuse_callback(user_id=user_id, session_id=thread_id)
+    
+    # Build RunnableConfig
+    config_kwargs = {
+        "configurable": configurable,
+        "run_id": run_id,
+    }
+    
+    # Add callbacks if available
+    if langfuse_handler:
+        config_kwargs["callbacks"] = [langfuse_handler]
+        
+    config = RunnableConfig(**config_kwargs)
 
     # Check for interrupts that need to be resumed
     state = await agent.aget_state(config=config)
@@ -116,7 +158,7 @@ async def _handle_input(user_input: UserInput, agent: Pregel) -> tuple[dict[str,
         task for task in state.tasks if hasattr(task, "interrupts") and task.interrupts
     ]
 
-    input: Command | dict[str, Any]
+    # Prepare input
     if interrupted_tasks:
         # assume user input is response to resume agent execution from interrupt
         input = Command(resume=user_input.message)
@@ -191,6 +233,30 @@ async def message_generator(
             stream_mode, event = stream_event
             new_messages = []
             if stream_mode == "updates":
+                # Send node updates to the client
+                if user_input.stream_node_updates is not False:  # Default to True if not specified
+                    for node, updates in event.items():
+                        # Include the actual update values in a safe way
+                        try:
+                            # If updates is too large or complex, we'll include a simplified version
+                            update_info = {
+                                "node": node,
+                                "has_updates": updates is not None and len(updates) > 0,
+                                "updates": _simplify_node_updates(updates),
+                                "run_id": str(run_id)  # Include the run_id in node updates
+                            }
+                            yield f"data: {json.dumps({'type': 'node_update', 'content': update_info})}\n\n"
+                        except Exception as e:
+                            logger.warning(f"Error while serializing node update: {e}")
+                            # Fallback to basic info if serialization fails
+                            update_info = {
+                                "node": node,
+                                "has_updates": updates is not None and len(updates) > 0,
+                                "error": "Could not serialize node updates",
+                                "run_id": str(run_id)  # Include the run_id in fallback info too
+                            }
+                            yield f"data: {json.dumps({'type': 'node_update', 'content': update_info})}\n\n"
+                
                 for node, updates in event.items():
                     # A simple approach to handle agent interrupts.
                     # In a more sophisticated implementation, we could add
@@ -198,7 +264,7 @@ async def message_generator(
                     if node == "__interrupt__":
                         interrupt: Interrupt
                         for interrupt in updates:
-                            new_messages.append(AIMessage(content=interrupt.value))
+                             new_messages.append(AIMessage(content=interrupt.value))
                         continue
                     updates = updates or {}
                     update_messages = updates.get("messages", [])
@@ -287,6 +353,93 @@ def _create_ai_message(parts: dict) -> AIMessage:
     return AIMessage(**filtered)
 
 
+def _simplify_node_updates(updates: Any) -> dict[str, Any]:
+    """
+    Process node updates to create a simplified, serializable representation.
+    This extracts useful information from complex node update objects.
+    """
+    if updates is None:
+        return {}
+    
+    # Handle dictionaries directly
+    if isinstance(updates, dict):
+        result = {}
+        # Extract and process messages if present
+        if "messages" in updates:
+            try:
+                result["messages"] = [
+                    {
+                        "type": _get_message_type(msg),
+                        "content": _get_message_content(msg),
+                    }
+                    for msg in updates.get("messages", [])
+                ]
+            except Exception:
+                # If extraction fails, just indicate messages are present
+                result["messages"] = "[Messages present but could not be serialized]"
+        
+        # Add other keys from the updates dict
+        for key, value in updates.items():
+            if key != "messages":  # Skip messages as we've already processed them
+                try:
+                    # Try to serialize the value, if it fails, store a placeholder
+                    json.dumps(value)  # Test if serializable
+                    result[key] = value
+                except (TypeError, OverflowError):
+                    # If value isn't JSON serializable, store a simpler representation
+                    result[key] = f"[Complex data: {type(value).__name__}]"
+        
+        return result
+    
+    # For non-dict objects, provide a basic representation
+    try:
+        # Try direct serialization first
+        json.dumps(updates)
+        return {"value": updates}
+    except (TypeError, OverflowError):
+        # If that fails, return a simpler representation
+        return {"value": f"[Complex data: {type(updates).__name__}]"}
+
+
+def _get_message_type(message: Any) -> str:
+    """Get the type of a message object."""
+    if hasattr(message, "__class__"):
+        class_name = message.__class__.__name__
+        if "HumanMessage" in class_name:
+            return "human"
+        elif "AIMessage" in class_name:
+            return "ai"
+        elif "ToolMessage" in class_name or "FunctionMessage" in class_name:
+            return "tool"
+        else:
+            return class_name
+    return "unknown"
+
+
+def _get_message_content(message: Any) -> str:
+    """Safely extract content from a message object."""
+    if hasattr(message, "content"):
+        content = message.content
+        # Convert content to string if it's not already
+        if not isinstance(content, str):
+            try:
+                if isinstance(content, list):
+                    # Handle list of content parts (common in OpenAI responses)
+                    parts = []
+                    for part in content:
+                        if isinstance(part, dict) and "text" in part:
+                            parts.append(part["text"])
+                        elif isinstance(part, str):
+                            parts.append(part)
+                    return " ".join(parts)
+                else:
+                    return str(content)
+            except Exception:
+                return "[Complex content]"
+        return content
+    return "[No content]"
+
+
 def _sse_response_example() -> dict[int | str, Any]:
     return {
         status.HTTP_200_OK: {
@@ -326,21 +479,57 @@ async def stream(user_input: StreamInput, agent_id: str = DEFAULT_AGENT) -> Stre
 @router.post("/feedback")
 async def feedback(feedback: Feedback) -> FeedbackResponse:
     """
-    Record feedback for a run to LangSmith.
+    Record feedback for a run using Langfuse.
 
-    This is a simple wrapper for the LangSmith create_feedback API, so the
+    This is a simple wrapper for the Langfuse score API, so the
     credentials can be stored and managed in the service rather than the client.
-    See: https://api.smith.langchain.com/redoc#tag/feedback/operation/create_feedback_api_v1_feedback_post
     """
-    client = LangsmithClient()
-    kwargs = feedback.kwargs or {}
-    client.create_feedback(
-        run_id=feedback.run_id,
-        key=feedback.key,
-        score=feedback.score,
-        **kwargs,
-    )
-    return FeedbackResponse()
+    try:
+        # Get Langfuse credentials from settings or environment variables
+        from langfuse import Langfuse
+        import os
+        from core import settings
+        from pydantic import SecretStr
+        
+        # Get credentials directly from environment or settings
+        public_key = os.environ.get("LANGFUSE_PUBLIC_KEY") or getattr(settings, "LANGFUSE_PUBLIC_KEY", None)
+        secret_key = os.environ.get("LANGFUSE_SECRET_KEY") or getattr(settings, "LANGFUSE_SECRET_KEY", None)
+        host = os.environ.get("LANGFUSE_HOST") or getattr(settings, "LANGFUSE_HOST", None) or "https://cloud.langfuse.com"
+        
+        # Check if credentials are available
+        if not public_key or not secret_key:
+            logger.error("Langfuse credentials not found, cannot record feedback")
+            raise HTTPException(status_code=500, detail="Langfuse credentials not found")
+        
+        # Handle SecretStr type
+        if isinstance(public_key, SecretStr):
+            public_key = public_key.get_secret_value()
+        if isinstance(secret_key, SecretStr):
+            secret_key = secret_key.get_secret_value()
+        
+        # Create Langfuse client with explicit credentials
+        langfuse = Langfuse(
+            public_key=public_key,
+            secret_key=secret_key,
+            host=host
+        )
+        
+        # Log for debugging
+        logger.info(f"Submitting feedback for run_id: {feedback.run_id}")
+        
+        # Convert feedback to Langfuse score
+        langfuse.score(
+            id=str(uuid4()),  # Generate a unique ID
+            trace_id=feedback.run_id,  # Use run_id as trace_id
+            name=feedback.key,  # Use the feedback key as the score name
+            value=feedback.score,  # Use the feedback score as the value
+            comment=feedback.kwargs.get("comment", "") if feedback.kwargs else "",
+        )
+        
+        return FeedbackResponse()
+    except Exception as e:
+        logger.error(f"Error recording feedback with Langfuse: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error recording feedback: {str(e)}")
 
 
 @router.post("/history")

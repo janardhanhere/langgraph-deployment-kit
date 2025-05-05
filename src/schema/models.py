@@ -2,19 +2,6 @@ from enum import StrEnum, auto
 from typing import TypeAlias
 
 
-class Provider(StrEnum):
-    OPENAI = auto()
-    OPENAI_COMPATIBLE = auto()
-    AZURE_OPENAI = auto()
-    DEEPSEEK = auto()
-    ANTHROPIC = auto()
-    GOOGLE = auto()
-    GROQ = auto()
-    AWS = auto()
-    OLLAMA = auto()
-    FAKE = auto()
-
-
 class OpenAIModelName(StrEnum):
     """https://platform.openai.com/docs/models/gpt-4o"""
 

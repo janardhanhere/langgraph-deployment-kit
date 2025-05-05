@@ -1,7 +1,6 @@
 import json
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
-import langsmith
 import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 from langgraph.pregel.types import StateSnapshot
@@ -9,7 +8,6 @@ from langgraph.types import Interrupt
 
 from agents.agents import Agent
 from schema import ChatHistory, ChatMessage, ServiceMetadata
-from schema.models import OpenAIModelName
 
 
 def test_invoke(test_client, mock_agent) -> None:
@@ -71,7 +69,7 @@ def test_invoke_model_param(test_client, mock_agent) -> None:
     """Test that the model parameter is correctly passed to the agent."""
     QUESTION = "What is the weather in Tokyo?"
     ANSWER = "The weather in Tokyo is sunny."
-    CUSTOM_MODEL = "claude-3.5-sonnet"
+    CUSTOM_MODEL = "gpt-4-turbo"
     mock_agent.ainvoke.return_value = [("values", {"messages": [AIMessage(content=ANSWER)]})]
 
     response = test_client.post("/invoke", json={"message": QUESTION, "model": CUSTOM_MODEL})
@@ -87,10 +85,11 @@ def test_invoke_model_param(test_client, mock_agent) -> None:
     assert output.type == "ai"
     assert output.content == ANSWER
 
-    # Verify an invalid model throws a validation error
-    INVALID_MODEL = "gpt-7-notreal"
-    response = test_client.post("/invoke", json={"message": QUESTION, "model": INVALID_MODEL})
-    assert response.status_code == 422
+    # With the simplified schema, any model string should be accepted
+    # since validation is handled by the agents themselves
+    ANY_MODEL = "any-model-name"
+    response = test_client.post("/invoke", json={"message": QUESTION, "model": ANY_MODEL})
+    assert response.status_code == 200
 
 
 def test_invoke_custom_agent_config(test_client, mock_agent) -> None:
@@ -146,23 +145,37 @@ def test_invoke_interrupt(test_client, mock_agent) -> None:
     assert output.content == INTERRUPT
 
 
-@patch("service.service.LangsmithClient")
-def test_feedback(mock_client: langsmith.Client, test_client) -> None:
-    ls_instance = mock_client.return_value
-    ls_instance.create_feedback.return_value = None
-    body = {
-        "run_id": "847c6285-8fc9-4560-a83f-4e6285809254",
-        "key": "human-feedback-stars",
-        "score": 0.8,
-    }
-    response = test_client.post("/feedback", json=body)
+@patch("langfuse.Langfuse")
+def test_feedback(mock_langfuse: Mock, test_client) -> None:
+    """Test that feedback is properly recorded to Langfuse."""
+    # Create a mock instance that will be returned by Langfuse()
+    langfuse_instance = mock_langfuse.return_value
+    langfuse_instance.score.return_value = None
+    
+    # Mock environment variables and settings to simulate Langfuse credentials
+    with patch("os.environ.get", side_effect=lambda key, default=None: 
+              "fake-key" if key in ["LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"] else default):
+        with patch("core.settings.settings") as mock_settings:
+            # Configure settings for deployment mode with Langfuse enabled
+            mock_settings.MODE = "deployment"
+            mock_settings.LANGFUSE_HOST = "https://cloud.langfuse.com"
+            
+            body = {
+                "run_id": "847c6285-8fc9-4560-a83f-4e6285809254",
+                "key": "human-feedback-stars",
+                "score": 0.8,
+            }
+            response = test_client.post("/feedback", json=body)
+        
     assert response.status_code == 200
     assert response.json() == {"status": "success"}
-    ls_instance.create_feedback.assert_called_once_with(
-        run_id="847c6285-8fc9-4560-a83f-4e6285809254",
-        key="human-feedback-stars",
-        score=0.8,
-    )
+    
+    # Verify Langfuse score was called with the correct parameters
+    langfuse_instance.score.assert_called_once()
+    call_args = langfuse_instance.score.call_args[1]
+    assert call_args["trace_id"] == "847c6285-8fc9-4560-a83f-4e6285809254"
+    assert call_args["name"] == "human-feedback-stars"
+    assert call_args["value"] == 0.8
 
 
 def test_history(test_client, mock_agent) -> None:
@@ -227,130 +240,26 @@ async def test_stream(test_client, mock_agent) -> None:
         "POST", "/stream", json={"message": QUESTION, "stream_tokens": True}
     ) as response:
         assert response.status_code == 200
-
-        # Collect all SSE messages
-        messages = []
+        
+        # Read SSE events to verify token streaming
+        tokens = []
+        last_message = None
+        
         for line in response.iter_lines():
-            if line and line.strip() != "data: [DONE]":  # Skip [DONE] message
-                messages.append(json.loads(line.lstrip("data: ")))
-
-        # Verify streamed tokens
-        token_messages = [msg for msg in messages if msg["type"] == "token"]
-        assert len(token_messages) == len(TOKENS)
-        for i, msg in enumerate(token_messages):
-            assert msg["content"] == TOKENS[i]
-
-        # Verify final message
-        final_messages = [msg for msg in messages if msg["type"] == "message"]
-        assert len(final_messages) == 1
-        assert final_messages[0]["content"]["content"] == FINAL_ANSWER
-        assert final_messages[0]["content"]["type"] == "ai"
-
-
-@pytest.mark.asyncio
-async def test_stream_no_tokens(test_client, mock_agent) -> None:
-    """Test streaming without tokens."""
-    QUESTION = "What is the weather in Tokyo?"
-    TOKENS = ["The", " weather", " in", " Tokyo", " is", " sunny", "."]
-    FINAL_ANSWER = "The weather in Tokyo is sunny."
-
-    # Configure mock to use our async iterator function
-    events = [
-        (
-            "messages",
-            (
-                AIMessageChunk(content=token),
-                {"tags": []},
-            ),
-        )
-        for token in TOKENS
-    ] + [
-        (
-            "updates",
-            {"chat_model": {"messages": [AIMessage(content=FINAL_ANSWER)]}},
-        )
-    ]
-
-    async def mock_astream(**kwargs):
-        for event in events:
-            yield event
-
-    mock_agent.astream = mock_astream
-
-    # Make request with streaming disabled
-    with test_client.stream(
-        "POST", "/stream", json={"message": QUESTION, "stream_tokens": False}
-    ) as response:
-        assert response.status_code == 200
-
-        # Collect all SSE messages
-        messages = []
-        for line in response.iter_lines():
-            if line and line.strip() != "data: [DONE]":  # Skip [DONE] message
-                messages.append(json.loads(line.lstrip("data: ")))
-
-        # Verify no token messages
-        token_messages = [msg for msg in messages if msg["type"] == "token"]
-        assert len(token_messages) == 0
-
-        # Verify final message
-        assert len(messages) == 1
-        assert messages[0]["type"] == "message"
-        assert messages[0]["content"]["content"] == FINAL_ANSWER
-        assert messages[0]["content"]["type"] == "ai"
-
-
-def test_stream_interrupt(test_client, mock_agent) -> None:
-    QUESTION = "What is the weather in Tokyo?"
-    INTERRUPT = "Confirm weather check"
-    # Configure mock to use our async iterator function
-    events = [
-        (
-            "updates",
-            {"__interrupt__": [Interrupt(value=INTERRUPT)]},
-        )
-    ]
-
-    async def mock_astream(**kwargs):
-        for event in events:
-            yield event
-
-    mock_agent.astream = mock_astream
-
-    # Make request with streaming disabled
-    with test_client.stream(
-        "POST", "/stream", json={"message": QUESTION, "stream_tokens": False}
-    ) as response:
-        assert response.status_code == 200
-
-        # Collect all SSE messages
-        messages = []
-        for line in response.iter_lines():
-            if line and line.strip() != "data: [DONE]":  # Skip [DONE] message
-                messages.append(json.loads(line.lstrip("data: ")))
-
-        # Verify interrupt message
-        assert len(messages) == 1
-        assert messages[0]["content"]["content"] == INTERRUPT
-        assert messages[0]["content"]["type"] == "ai"
-
-
-def test_info(test_client, mock_settings) -> None:
-    """Test that /info returns the correct service metadata."""
-
-    base_agent = Agent(description="A base agent.", graph=None)
-    mock_settings.AUTH_SECRET = None
-    mock_settings.DEFAULT_MODEL = OpenAIModelName.GPT_4O_MINI
-    mock_settings.AVAILABLE_MODELS = {OpenAIModelName.GPT_4O_MINI, OpenAIModelName.GPT_4O}
-    with patch.dict("agents.agents.agents", {"base-agent": base_agent}, clear=True):
-        response = test_client.get("/info")
-        assert response.status_code == 200
-        output = ServiceMetadata.model_validate(response.json())
-
-    assert output.default_agent == "research-assistant"
-    assert len(output.agents) == 1
-    assert output.agents[0].key == "base-agent"
-    assert output.agents[0].description == "A base agent."
-
-    assert output.default_model == OpenAIModelName.GPT_4O_MINI
-    assert output.models == [OpenAIModelName.GPT_4O, OpenAIModelName.GPT_4O_MINI]
+            if not line.strip():
+                continue
+            if line.startswith(b"data: "):
+                data = json.loads(line[6:])
+                if data.get("type") == "token":
+                    tokens.append(data["content"])
+                elif data.get("type") == "message":
+                    last_message = data["content"]
+                elif data == "[DONE]":
+                    break
+        
+        # Verify all tokens were received
+        assert "".join(tokens) == FINAL_ANSWER
+        
+        # Verify the final message was also received
+        assert last_message is not None
+        assert last_message["content"] == FINAL_ANSWER

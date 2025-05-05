@@ -1,189 +1,73 @@
-import json
+"""
+Tests for the simplified Settings module used in deployment mode.
+"""
 import os
 from unittest.mock import patch
 
 import pytest
-from pydantic import SecretStr, ValidationError
+from pydantic import SecretStr
 
-from core.settings import Settings, check_str_is_http
-from schema.models import AnthropicModelName, AzureOpenAIModelName, OpenAIModelName
-
-
-def test_check_str_is_http():
-    # Test valid HTTP URLs
-    assert check_str_is_http("http://example.com/") == "http://example.com/"
-    assert check_str_is_http("https://api.test.com/") == "https://api.test.com/"
-
-    # Test invalid URLs
-    with pytest.raises(ValidationError):
-        check_str_is_http("not_a_url")
-    with pytest.raises(ValidationError):
-        check_str_is_http("ftp://invalid.com")
+from core.settings import Settings
 
 
 def test_settings_default_values():
+    """Test default settings values in deployment mode."""
     settings = Settings(_env_file=None)
     assert settings.HOST == "0.0.0.0"
     assert settings.PORT == 8080
-    assert settings.USE_AWS_BEDROCK is False
-    assert settings.USE_FAKE_MODEL is False
-
-
-def test_settings_no_api_keys():
-    # Test that settings raises error when no API keys are provided
-    with patch.dict(os.environ, {}, clear=True):
-        with pytest.raises(ValueError, match="At least one LLM API key must be provided"):
-            _ = Settings(_env_file=None)
-
-
-def test_settings_with_openai_key():
-    with patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"}, clear=True):
-        settings = Settings(_env_file=None)
-        assert settings.OPENAI_API_KEY == SecretStr("test_key")
-        assert settings.DEFAULT_MODEL == OpenAIModelName.GPT_4O_MINI
-        assert settings.AVAILABLE_MODELS == set(OpenAIModelName)
-
-
-def test_settings_with_anthropic_key():
-    with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test_key"}, clear=True):
-        settings = Settings(_env_file=None)
-        assert settings.ANTHROPIC_API_KEY == SecretStr("test_key")
-        assert settings.DEFAULT_MODEL == AnthropicModelName.HAIKU_3
-        assert settings.AVAILABLE_MODELS == set(AnthropicModelName)
-
-
-def test_settings_with_multiple_api_keys():
-    with patch.dict(
-        os.environ,
-        {
-            "OPENAI_API_KEY": "test_openai_key",
-            "ANTHROPIC_API_KEY": "test_anthropic_key",
-        },
-        clear=True,
-    ):
-        settings = Settings(_env_file=None)
-        assert settings.OPENAI_API_KEY == SecretStr("test_openai_key")
-        assert settings.ANTHROPIC_API_KEY == SecretStr("test_anthropic_key")
-        # When multiple providers are available, OpenAI should be the default
-        assert settings.DEFAULT_MODEL == OpenAIModelName.GPT_4O_MINI
-        # Available models should include exactly all OpenAI and Anthropic models
-        expected_models = set(OpenAIModelName)
-        expected_models.update(set(AnthropicModelName))
-        assert settings.AVAILABLE_MODELS == expected_models
+    assert settings.MODE == "deployment"
 
 
 def test_settings_base_url():
+    """Test the BASE_URL computed property."""
     settings = Settings(HOST="0.0.0.0", PORT=8000, _env_file=None)
     assert settings.BASE_URL == "http://0.0.0.0:8000"
 
 
 def test_settings_is_dev():
+    """Test the is_dev() method."""
     settings = Settings(MODE="dev", _env_file=None)
     assert settings.is_dev() is True
 
-    settings = Settings(MODE="prod", _env_file=None)
+    settings = Settings(MODE="deployment", _env_file=None)
     assert settings.is_dev() is False
 
 
-def test_settings_with_azure_openai_key():
+def test_settings_with_langfuse():
+    """Test settings with Langfuse configuration."""
     with patch.dict(
         os.environ,
         {
-            "AZURE_OPENAI_API_KEY": "test_key",
-            "AZURE_OPENAI_ENDPOINT": "https://test.openai.azure.com",
-            "AZURE_OPENAI_DEPLOYMENT_MAP": '{"gpt-4o": "deployment-1", "gpt-4o-mini": "deployment-2"}',
+            "LANGFUSE_PUBLIC_KEY": "pk-test",
+            "LANGFUSE_SECRET_KEY": "sk-test",
+            "LANGFUSE_HOST": "https://custom.langfuse.com",
         },
         clear=True,
     ):
         settings = Settings(_env_file=None)
-        assert settings.AZURE_OPENAI_API_KEY.get_secret_value() == "test_key"
-        assert settings.DEFAULT_MODEL == AzureOpenAIModelName.AZURE_GPT_4O_MINI
-        assert settings.AVAILABLE_MODELS == set(AzureOpenAIModelName)
+        assert settings.LANGFUSE_PUBLIC_KEY == SecretStr("pk-test")
+        assert settings.LANGFUSE_SECRET_KEY == SecretStr("sk-test")
+        assert settings.LANGFUSE_HOST == "https://custom.langfuse.com"
 
 
-def test_settings_with_both_openai_and_azure():
+def test_settings_with_database_config():
+    """Test settings with database configuration."""
     with patch.dict(
         os.environ,
         {
-            "OPENAI_API_KEY": "test_openai_key",
-            "AZURE_OPENAI_API_KEY": "test_azure_key",
-            "AZURE_OPENAI_ENDPOINT": "https://test.openai.azure.com",
-            "AZURE_OPENAI_DEPLOYMENT_MAP": '{"gpt-4o": "deployment-1", "gpt-4o-mini": "deployment-2"}',
+            "DATABASE_TYPE": "postgres",
+            "POSTGRES_USER": "testuser",
+            "POSTGRES_PASSWORD": "testpass",
+            "POSTGRES_HOST": "localhost",
+            "POSTGRES_PORT": "5432",
+            "POSTGRES_DB": "testdb",
         },
         clear=True,
     ):
         settings = Settings(_env_file=None)
-        assert settings.OPENAI_API_KEY == SecretStr("test_openai_key")
-        assert settings.AZURE_OPENAI_API_KEY == SecretStr("test_azure_key")
-        # When multiple providers are available, OpenAI should be the default
-        assert settings.DEFAULT_MODEL == OpenAIModelName.GPT_4O_MINI
-        # Available models should include both OpenAI and Azure OpenAI models
-        expected_models = set(OpenAIModelName)
-        expected_models.update(set(AzureOpenAIModelName))
-        assert settings.AVAILABLE_MODELS == expected_models
-
-
-def test_settings_azure_deployment_names():
-    # Delete this test
-    pass
-
-
-def test_settings_azure_missing_deployment_names():
-    with patch.dict(
-        os.environ,
-        {
-            "AZURE_OPENAI_API_KEY": "test_key",
-            "AZURE_OPENAI_ENDPOINT": "https://test.openai.azure.com",
-        },
-        clear=True,
-    ):
-        with pytest.raises(ValidationError, match="AZURE_OPENAI_DEPLOYMENT_MAP must be set"):
-            Settings(_env_file=None)
-
-
-def test_settings_azure_deployment_map():
-    with patch.dict(
-        os.environ,
-        {
-            "AZURE_OPENAI_API_KEY": "test_key",
-            "AZURE_OPENAI_ENDPOINT": "https://test.openai.azure.com",
-            "AZURE_OPENAI_DEPLOYMENT_MAP": '{"gpt-4o": "deploy1", "gpt-4o-mini": "deploy2"}',
-        },
-        clear=True,
-    ):
-        settings = Settings(_env_file=None)
-        assert settings.AZURE_OPENAI_DEPLOYMENT_MAP == {
-            "gpt-4o": "deploy1",
-            "gpt-4o-mini": "deploy2",
-        }
-
-
-def test_settings_azure_invalid_deployment_map():
-    with patch.dict(
-        os.environ,
-        {
-            "AZURE_OPENAI_API_KEY": "test_key",
-            "AZURE_OPENAI_ENDPOINT": "https://test.openai.azure.com",
-            "AZURE_OPENAI_DEPLOYMENT_MAP": '{"gpt-4o": "deploy1"}',  # Missing required model
-        },
-        clear=True,
-    ):
-        with pytest.raises(ValueError, match="Missing required Azure deployments"):
-            Settings(_env_file=None)
-
-
-def test_settings_azure_openai():
-    """Test Azure OpenAI settings."""
-    deployment_map = {"gpt-4o": "deployment1", "gpt-4o-mini": "deployment2"}
-    with patch.dict(
-        os.environ,
-        {
-            "AZURE_OPENAI_API_KEY": "test-key",
-            "AZURE_OPENAI_ENDPOINT": "https://test.openai.azure.com",
-            "AZURE_OPENAI_DEPLOYMENT_MAP": json.dumps(deployment_map),
-        },
-    ):
-        settings = Settings(_env_file=None)
-        assert settings.AZURE_OPENAI_API_KEY.get_secret_value() == "test-key"
-        assert settings.AZURE_OPENAI_ENDPOINT == "https://test.openai.azure.com"
-        assert settings.AZURE_OPENAI_DEPLOYMENT_MAP == deployment_map
+        assert settings.DATABASE_TYPE == "postgres"
+        assert settings.POSTGRES_USER == "testuser"
+        assert settings.POSTGRES_PASSWORD == SecretStr("testpass")
+        assert settings.POSTGRES_HOST == "localhost"
+        assert settings.POSTGRES_PORT == 5432
+        assert settings.POSTGRES_DB == "testdb"
