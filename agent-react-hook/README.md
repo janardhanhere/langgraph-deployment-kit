@@ -12,6 +12,7 @@ npm install agent-react-hook
 
 - 🔄 **Streaming Responses**: Real-time token updates as the agent generates them
 - 🧠 **Node Updates**: Track internal states of agent nodes
+- 🔄 **Auto-reset**: Node updates are automatically reset with each new message
 - 🔑 **API Key Authentication**: Secure communication with your agent API
 - 🧵 **Thread Management**: Continue conversations with thread IDs
 - 🔌 **Event Callbacks**: Hooks for tokens, messages, errors, and more

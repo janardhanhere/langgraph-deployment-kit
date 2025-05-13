@@ -137,7 +137,6 @@ export function useAgent(options) {
     setIsLoading(false);
     onFinish?.();
   }, [onFinish]);
-
   /**
    * Submit a message to the agent
    */
@@ -147,6 +146,7 @@ export function useAgent(options) {
     
     // Reset state for new request
     setCurrentTokens("");
+    setNodeUpdates({}); // Reset node updates for each new message
     setError(null);
     setIsLoading(true);
     
