@@ -6,7 +6,14 @@
   "module": "dist/index.js",
   "files": [
     "dist"
-  ],
+  ],  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/janardhanhere/langgraph-deployment-kit.git"
+  },
+  "homepage": "https://github.com/janardhanhere/langgraph-deployment-kit/tree/main/agent-react-hook",
+  "bugs": {
+    "url": "https://github.com/janardhanhere/langgraph-deployment-kit/issues"
+  },
   "scripts": {
     "build": "webpack --mode production",
     "prepublishOnly": "npm run build"
@@ -17,9 +24,11 @@
     "agent",
     "api",
     "experimental"
-  ],
-  "author": "Janardhan Balaji",
+  ],  "author": "Janardhan Balaji",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "peerDependencies": {
     "react": "^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0"
   },

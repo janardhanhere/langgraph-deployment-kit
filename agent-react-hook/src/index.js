@@ -5,11 +5,9 @@ import { useState, useEffect, useCallback, useRef } from 'react';
  * 
  * @param {Object} options - Configuration options for the agent
  * @param {string} options.baseUrl - Base URL of the agent API
- * @param {string} [options.agentId] - ID of the agent to use
- * @param {string} [options.threadId] - Thread ID for continuing a conversation
+ * @param {string} [options.agentId] - ID of the agent to use * @param {string} [options.threadId] - Thread ID for continuing a conversation
  * @param {string} [options.userId] - User ID to associate with this conversation
  * @param {string} [options.sessionId] - Session ID to associate with this conversation
- * @param {string} [options.model] - Model to use for the agent
  * @param {string} [options.apiKey] - API key for authentication
  * @param {boolean} [options.streamTokens=true] - Whether to stream tokens from the LLM
  * @param {boolean} [options.streamNodeUpdates=true] - Whether to stream node updates
@@ -22,14 +20,12 @@ import { useState, useEffect, useCallback, useRef } from 'react';
  * @param {Function} [options.onThreadId] - Callback when a thread ID is created or changes
  * @returns {Object} Methods and state for interacting with the agent
  */
-export function useAgent(options) {
-  const {
+export function useAgent(options) {  const {
     baseUrl,
     agentId,
     threadId: initialThreadId,
     userId,
     sessionId,
-    model,
     apiKey,
     streamTokens = true,
     streamNodeUpdates = true,
@@ -171,8 +167,7 @@ export function useAgent(options) {
     try {
       // Prepare URL and request body
       // Ensure baseUrl doesn't end with a slash
-      const normalizedBaseUrl = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
-      const url = `${normalizedBaseUrl}/${agentId || 'default'}/stream`;
+      const normalizedBaseUrl = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;      const url = `${normalizedBaseUrl}/${agentId || 'default'}/stream`;
       
       // Always include thread_id if we have one, even if it's empty
       const body = {
@@ -182,7 +177,6 @@ export function useAgent(options) {
         thread_id: threadId || "",
         ...(userId && { user_id: userId }),
         ...(sessionId && { session_id: sessionId }),
-        ...(model && { model }),
         ...(Object.keys(agentConfig).length > 0 && { agent_config: agentConfig })
       };
       
@@ -268,14 +262,12 @@ export function useAgent(options) {
         onError?.(err.message);
       }
       cleanup();
-    }
-  }, [
+    }  }, [
     baseUrl,
     agentId,
     threadId,
     userId,
     sessionId,
-    model,
     apiKey,
     streamTokens,
     streamNodeUpdates,

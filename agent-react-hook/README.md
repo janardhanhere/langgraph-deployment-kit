@@ -1,5 +1,9 @@
 # agent-react-hook
 
+[![npm version](https://img.shields.io/npm/v/agent-react-hook.svg)](https://www.npmjs.com/package/agent-react-hook)
+[![npm downloads](https://img.shields.io/npm/dm/agent-react-hook.svg)](https://www.npmjs.com/package/agent-react-hook)
+[![GitHub license](https://img.shields.io/github/license/janardhanhere/langgraph-deployment-kit.svg)](https://github.com/janardhanhere/langgraph-deployment-kit/blob/main/LICENSE)
+
 A React hook for interacting with agent APIs, supporting streaming responses, API key authentication, and easy integration with state management.
 
 ## Installation
