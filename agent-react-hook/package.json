@@ -1,6 +1,6 @@
 {
   "name": "agent-react-hook",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "A React hook for interacting with agent APIs (Experimental)",
   "main": "dist/index.js",
   "module": "dist/index.js",
@@ -25,9 +25,9 @@
     "api",
     "experimental"
   ],  "author": "Janardhan Balaji",
-  "license": "MIT",
-  "publishConfig": {
-    "access": "public"
+  "license": "MIT",  "publishConfig": {
+    "access": "public",
+    "registry": "https://npm.pkg.github.com/@janardhanhere"
   },
   "peerDependencies": {
     "react": "^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0"
