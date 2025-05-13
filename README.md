@@ -69,7 +69,6 @@ This project provides a robust framework for deploying and running LangGraph age
 | threadId           | string    | No       | Thread ID for continuing a conversation.                                                    |
 | userId             | string    | No       | User ID to associate with this conversation.                                                |
 | sessionId          | string    | No       | Session ID to associate with this conversation.                                             |
-| model              | string    | No       | Model to use for the agent (if your backend supports multiple models).                      |
 | apiKey             | string    | No       | API key for authentication (sent as Bearer token).                                          |
 | streamTokens       | boolean   | No       | Whether to stream tokens from the LLM (default: true).                                      |
 | streamNodeUpdates  | boolean   | No       | Whether to stream node updates (default: true).                                             |
@@ -105,7 +104,6 @@ function ChatComponent() {
     threadId: 'your-thread-id',
     userId: 'user-123',
     sessionId: 'session-abc',
-    model: 'gpt-4',
     apiKey: 'your-api-key',
     streamTokens: true,
     streamNodeUpdates: true,
